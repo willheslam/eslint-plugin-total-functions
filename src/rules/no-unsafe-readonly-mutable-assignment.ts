@@ -14,22 +14,24 @@ const unsafeIndexAssignmentFunc: UnsafeIndexAssignmentFunc = (
   sourceType: Type,
   checker: TypeChecker
 ): boolean => {
-  const destinationIndexInfo = checker.getIndexInfoOfType(
-    destinationType,
-    indexKind
-  );
-  const destinationTypeHasReadonlyIndexSignature =
-    destinationIndexInfo !== undefined
-      ? destinationIndexInfo.isReadonly
-      : false;
   const sourceIndexInfo = checker.getIndexInfoOfType(sourceType, indexKind);
   const sourceTypeHasReadonlyIndexSignature =
     sourceIndexInfo !== undefined ? sourceIndexInfo.isReadonly : false;
 
-  return (
-    sourceTypeHasReadonlyIndexSignature &&
-    !destinationTypeHasReadonlyIndexSignature
-  );
+  if (sourceTypeHasReadonlyIndexSignature) {
+    const destinationIndexInfo = checker.getIndexInfoOfType(
+      destinationType,
+      indexKind
+    );
+    const destinationTypeHasReadonlyIndexSignature =
+      destinationIndexInfo !== undefined
+        ? destinationIndexInfo.isReadonly
+        : false;
+
+    return !destinationTypeHasReadonlyIndexSignature;
+  }
+
+  return false;
 };
 
 const unsafePropertyAssignmentFunc: UnsafePropertyAssignmentFunc = (
@@ -46,19 +48,23 @@ const unsafePropertyAssignmentFunc: UnsafePropertyAssignmentFunc = (
     return false;
   }
 
-  const destinationPropIsReadonly = isPropertyReadonlyInType(
-    destinationType,
-    destinationProperty.getEscapedName(),
-    checker
-  );
-
   const sourcePropIsReadonly = isPropertyReadonlyInType(
     sourceType,
     sourceProperty.getEscapedName(),
     checker
   );
 
-  return sourcePropIsReadonly && !destinationPropIsReadonly;
+  if (sourcePropIsReadonly) {
+    const destinationPropIsReadonly = isPropertyReadonlyInType(
+      destinationType,
+      destinationProperty.getEscapedName(),
+      checker
+    );
+
+    return !destinationPropIsReadonly;
+  }
+
+  return false;
 };
 
 /**
