@@ -26,6 +26,11 @@ export type TypePairArray = ReadonlyArray<{
   readonly sourceType: Type;
 }>;
 
+type SignaturePair = {
+  readonly destinationSignature: Signature;
+  readonly sourceSignature: Signature;
+};
+
 export type SignaturePairArray = ReadonlyArray<{
   readonly destinationSignature: Signature;
   readonly sourceSignature: Signature;
@@ -95,20 +100,16 @@ const isSignatureAssignable = (
   return false;
 };
 
-const assignableSignaturePairs = (
+const assignableSignaturePairs = function* (
   destinationNode: Node,
   sourceNode: Node,
   destinationSignatures: readonly Signature[],
   sourceSignatures: readonly Signature[],
   checker: TypeChecker
-  // TODO https://github.com/danielnixon/eslint-plugin-total-functions/issues/100
-  // eslint-disable-next-line total-functions/no-unsafe-mutable-readonly-assignment
-): SignaturePairArray => {
-  // TODO https://github.com/danielnixon/eslint-plugin-total-functions/issues/100
-  // eslint-disable-next-line total-functions/no-unsafe-mutable-readonly-assignment
-  return sourceSignatures.flatMap((sourceSignature) =>
-    destinationSignatures
-      .filter((destinationSignature) =>
+): Generator<SignaturePair> {
+  for (const sourceSignature of sourceSignatures) {
+    for (const destinationSignature of destinationSignatures) {
+      if (
         isSignatureAssignable(
           destinationNode,
           sourceNode,
@@ -116,12 +117,11 @@ const assignableSignaturePairs = (
           destinationSignature,
           checker
         )
-      )
-      .map((destinationSignature) => ({
-        sourceSignature,
-        destinationSignature,
-      }))
-  );
+      ) {
+        yield { sourceSignature, destinationSignature };
+      }
+    }
+  }
 };
 
 /**
@@ -382,26 +382,26 @@ export const createNoUnsafeAssignmentRule = (
           checker
         );
 
-        let nextSeenTypes: TypePairArray;
+        let nextSeenTypes: TypePairArray | undefined;
+        for (const {
+          destinationSignature,
+          sourceSignature,
+        } of signaturePairs) {
+          const sourceReturnType = sourceSignature.getReturnType();
+          const destinationReturnType = destinationSignature.getReturnType();
 
-        return signaturePairs.some(
-          ({ destinationSignature, sourceSignature }) => {
-            const sourceReturnType = sourceSignature.getReturnType();
-            const destinationReturnType = destinationSignature.getReturnType();
+          // lazily initialise
+          if (nextSeenTypes === undefined) {
+            // TODO https://github.com/danielnixon/eslint-plugin-total-functions/issues/100
+            // eslint-disable-next-line total-functions/no-unsafe-mutable-readonly-assignment
+            nextSeenTypes = seenTypes.concat([
+              {
+                destinationType,
+                sourceType,
+              },
+            ]);
 
-            // lazily initialise
-            if (nextSeenTypes === undefined) {
-              // TODO https://github.com/danielnixon/eslint-plugin-total-functions/issues/100
-              // eslint-disable-next-line total-functions/no-unsafe-mutable-readonly-assignment
-              nextSeenTypes = seenTypes.concat([
-                {
-                  destinationType,
-                  sourceType,
-                },
-              ]);
-            }
-
-            return (
+            if (
               // and the return types of the functions are unsafe assignment,
               isUnsafeAssignment(
                 destinationNode,
@@ -420,9 +420,12 @@ export const createNoUnsafeAssignmentRule = (
                 checker,
                 nextSeenTypes
               )
-            );
+            ) {
+              return true;
+            }
           }
-        );
+        }
+        return false;
       }
       return false;
     });
