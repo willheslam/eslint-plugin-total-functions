@@ -42,7 +42,8 @@ export type MessageId =
   | "errorStringVariableDeclaration"
   | "errorStringArrowFunctionExpression"
   | "errorStringTSAsExpression"
-  | "errorStringTSTypeAssertion";
+  | "errorStringTSTypeAssertion"
+  | "errorStringTimedOut";
 
 export type Context = Readonly<RuleContext<MessageId, readonly []>>;
 
@@ -94,7 +95,6 @@ const isSignatureAssignable = (
         );
       }
     );
-
     return allParametersAreAssignable;
   }
   return false;
@@ -164,7 +164,7 @@ export const createNoUnsafeAssignmentRule = (
   unsafeIndexAssignmentFunc: UnsafeIndexAssignmentFunc
   // eslint-disable-next-line sonarjs/cognitive-complexity
 ) => {
-  const isUnsafeIndexAssignment = (
+  const isUnsafeIndexAssignment = function* (
     indexKind: IndexKind,
     destinationNode: Node,
     sourceNode: Node,
@@ -172,7 +172,8 @@ export const createNoUnsafeAssignmentRule = (
     sourceType: Type,
     checker: TypeChecker,
     seenTypes: TypePairArray
-  ): boolean => {
+  ): Generator<boolean, boolean, undefined> {
+    yield false;
     const isUnsafe = unsafeIndexAssignmentFunc(
       indexKind,
       destinationType,
@@ -194,23 +195,20 @@ export const createNoUnsafeAssignmentRule = (
         ? sourceType.getNumberIndexType()
         : sourceType.getStringIndexType();
 
-    return (
-      // or
-      // the index types are considered unsafe themselves (recursively).
-      destinationIndexType !== undefined &&
-      sourceIndexType !== undefined &&
-      isUnsafeAssignment(
+    if (destinationIndexType !== undefined && sourceIndexType !== undefined) {
+      return yield* isUnsafeAssignment(
         destinationNode,
         sourceNode,
         destinationIndexType,
         sourceIndexType,
         checker,
         seenTypes
-      )
-    );
+      );
+    }
+    return false;
   };
 
-  const isUnsafePropertyAssignmentRec = (
+  const isUnsafePropertyAssignmentRec = function* (
     destinationNode: Node,
     sourceNode: Node,
     // eslint-disable-next-line @typescript-eslint/ban-types
@@ -219,7 +217,8 @@ export const createNoUnsafeAssignmentRule = (
     sourceProperty: Symbol,
     checker: TypeChecker,
     seenTypes: TypePairArray
-  ): boolean => {
+  ): Generator<boolean, boolean, undefined> {
+    yield false;
     const destinationPropertyType = checker.getTypeOfSymbolAtLocation(
       destinationProperty,
       destinationNode
@@ -229,7 +228,7 @@ export const createNoUnsafeAssignmentRule = (
       sourceNode
     );
 
-    return isUnsafeAssignment(
+    return yield* isUnsafeAssignment(
       destinationNode,
       sourceNode,
       destinationPropertyType,
@@ -239,14 +238,15 @@ export const createNoUnsafeAssignmentRule = (
     );
   };
 
-  const isUnsafePropertyAssignment = (
+  const isUnsafePropertyAssignment = function* (
     destinationNode: Node,
     sourceNode: Node,
     destinationType: Type,
     sourceType: Type,
     checker: TypeChecker,
     seenTypes: TypePairArray
-  ): boolean => {
+  ): Generator<boolean, boolean, undefined> {
+    yield false;
     // eslint-disable-next-line functional/no-conditional-statement
     if (checker.isArrayType(destinationType)) {
       // Avoid checking every property for unsafe assignment if the source and destination are arrays.
@@ -263,8 +263,8 @@ export const createNoUnsafeAssignmentRule = (
       return false;
     }
 
-    let nextSeenTypes: TypePairArray;
-    return destinationType.getProperties().some((destinationProperty) => {
+    let nextSeenTypes: TypePairArray | undefined;
+    for (const destinationProperty of destinationType.getProperties()) {
       const sourceProperty = sourceType.getProperty(destinationProperty.name);
 
       const isUnsafe = unsafePropertyAssignmentFunc(
@@ -282,7 +282,7 @@ export const createNoUnsafeAssignmentRule = (
 
       // eslint-disable-next-line functional/no-conditional-statement
       if (sourceProperty === undefined) {
-        return false;
+        continue;
       }
 
       // lazily initialise, but it should be the same for all destinationProperties
@@ -297,7 +297,7 @@ export const createNoUnsafeAssignmentRule = (
         ]);
       }
 
-      return isUnsafePropertyAssignmentRec(
+      const result = yield* isUnsafePropertyAssignmentRec(
         destinationNode,
         sourceNode,
         destinationProperty,
@@ -305,60 +305,70 @@ export const createNoUnsafeAssignmentRule = (
         checker,
         nextSeenTypes
       );
-    });
+      if (result) {
+        return true;
+      }
+    }
+    return false;
   };
 
   const intersectionPartsIncludesObjectType = (type: Type): boolean =>
     intersectionTypeParts(type).some(isObjectType);
 
-  const isUnsafeParameterAssignment = (
+  const isUnsafeParameterAssignment = function* (
     destinationSignature: Signature,
     sourceSignature: Signature,
     destinationNode: Node,
     sourceNode: Node,
     checker: TypeChecker,
     nextSeenTypes: TypePairArray
-  ): boolean => {
-    return destinationSignature
-      .getParameters()
-      .some((destinationParameterSymbol, index) => {
-        const sourceParameterSymbol = sourceSignature.getParameters()[index];
+  ): Generator<boolean, boolean, undefined> {
+    yield false;
+    let index = 0;
+    for (const destinationParameterSymbol of destinationSignature.getParameters()) {
+      const sourceParameterSymbol = sourceSignature.getParameters()[index];
 
-        // eslint-disable-next-line functional/no-conditional-statement
-        if (sourceParameterSymbol === undefined) {
-          return false;
-        }
+      // eslint-disable-next-line functional/no-conditional-statement
+      if (sourceParameterSymbol === undefined) {
+        continue;
+      }
 
-        const destinationParameterType = checker.getTypeOfSymbolAtLocation(
-          destinationParameterSymbol,
-          destinationNode
-        );
+      const destinationParameterType = checker.getTypeOfSymbolAtLocation(
+        destinationParameterSymbol,
+        destinationNode
+      );
 
-        const sourceParameterType = checker.getTypeOfSymbolAtLocation(
-          sourceParameterSymbol,
-          sourceNode
-        );
+      const sourceParameterType = checker.getTypeOfSymbolAtLocation(
+        sourceParameterSymbol,
+        sourceNode
+      );
 
-        // Source and destination swapped here - function parameters are contravariant.
-        return isUnsafeAssignment(
-          sourceNode,
-          destinationNode,
-          sourceParameterType,
-          destinationParameterType,
-          checker,
-          nextSeenTypes
-        );
-      });
+      // Source and destination swapped here - function parameters are contravariant.
+      const result = yield* isUnsafeAssignment(
+        sourceNode,
+        destinationNode,
+        sourceParameterType,
+        destinationParameterType,
+        checker,
+        nextSeenTypes
+      );
+      if (result) {
+        return true;
+      }
+      index++;
+    }
+    return false;
   };
 
-  const isUnsafeFunctionAssignment = (
+  const isUnsafeFunctionAssignment = function* (
     typePairs: TypePairArray,
     destinationNode: Node,
     sourceNode: Node,
     checker: TypeChecker,
     seenTypes: TypePairArray
-  ): boolean =>
-    typePairs.some(({ sourceType, destinationType }) => {
+  ): Generator<boolean, boolean, undefined> {
+    yield false;
+    for (const { sourceType, destinationType } of typePairs) {
       // This is an unsafe assignment if...
       if (
         // we're not in an infinitely recursive type,
@@ -403,43 +413,44 @@ export const createNoUnsafeAssignmentRule = (
 
             if (
               // and the return types of the functions are unsafe assignment,
-              isUnsafeAssignment(
+              (yield* isUnsafeAssignment(
                 destinationNode,
                 sourceNode,
                 destinationReturnType,
                 sourceReturnType,
                 checker,
                 nextSeenTypes
-              ) ||
+              )) ||
               // or the parameter types of the functions are unsafe assignment.
-              isUnsafeParameterAssignment(
+              (yield* isUnsafeParameterAssignment(
                 destinationSignature,
                 sourceSignature,
                 destinationNode,
                 sourceNode,
                 checker,
                 nextSeenTypes
-              )
+              ))
             ) {
               return true;
             }
           }
         }
-        return false;
       }
-      return false;
-    });
+    }
+    return false;
+  };
 
-  const inUnsafeObjectAssignment = (
+  const inUnsafeObjectAssignment = function* (
     typePairs: TypePairArray,
     destinationNode: Node,
     sourceNode: Node,
     checker: TypeChecker,
     seenTypes: TypePairArray
-  ): boolean =>
-    typePairs.some(({ sourceType, destinationType }) => {
+  ): Generator<boolean, boolean, undefined> {
+    yield false;
+    for (const { sourceType, destinationType } of typePairs) {
       if (!intersectionPartsIncludesObjectType(destinationType)) {
-        return false;
+        continue;
       }
 
       // This is an unsafe assignment if...
@@ -465,8 +476,9 @@ export const createNoUnsafeAssignmentRule = (
 
         // and we're either:
         // unsafe string index assignment, or
-        return (
-          isUnsafeIndexAssignment(
+
+        const result =
+          (yield* isUnsafeIndexAssignment(
             IndexKind.String,
             destinationNode,
             sourceNode,
@@ -474,9 +486,9 @@ export const createNoUnsafeAssignmentRule = (
             sourceType,
             checker,
             nextSeenTypes
-          ) ||
+          )) ||
           // unsafe number index assignment, or
-          isUnsafeIndexAssignment(
+          (yield* isUnsafeIndexAssignment(
             IndexKind.Number,
             destinationNode,
             sourceNode,
@@ -484,30 +496,33 @@ export const createNoUnsafeAssignmentRule = (
             sourceType,
             checker,
             nextSeenTypes
-          ) ||
+          )) ||
           // unsafe property assignment.
-          isUnsafePropertyAssignment(
+          (yield* isUnsafePropertyAssignment(
             destinationNode,
             sourceNode,
             destinationType,
             sourceType,
             checker,
             nextSeenTypes
-          )
-        );
+          ));
+        if (result) {
+          return true;
+        }
       }
+    }
+    return false;
+  };
 
-      return false;
-    });
-
-  const isUnsafeAssignment = (
+  const isUnsafeAssignment = function* (
     destinationNode: Node,
     sourceNode: Node,
     rawDestinationType: Type,
     rawSourceType: Type,
     checker: TypeChecker,
     seenTypes: TypePairArray = []
-  ): boolean => {
+  ): Generator<boolean, boolean, undefined> {
+    yield false;
     // eslint-disable-next-line functional/no-conditional-statement
     if (rawDestinationType === rawSourceType) {
       // Never unsafe if the types are equal.
@@ -521,20 +536,20 @@ export const createNoUnsafeAssignmentRule = (
     );
 
     return (
-      inUnsafeObjectAssignment(
+      (yield* inUnsafeObjectAssignment(
         typePairs,
         destinationNode,
         sourceNode,
         checker,
         seenTypes
-      ) ||
-      isUnsafeFunctionAssignment(
+      )) ||
+      (yield* isUnsafeFunctionAssignment(
         typePairs,
         destinationNode,
         sourceNode,
         checker,
         seenTypes
-      )
+      ))
     );
   };
 
@@ -560,16 +575,28 @@ export const createNoUnsafeAssignmentRule = (
         const sourceNode = destinationNode.expression;
         const sourceType = checker.getTypeAtLocation(sourceNode);
 
-        // eslint-disable-next-line functional/no-conditional-statement
-        if (
-          isUnsafeAssignment(
-            destinationNode,
-            sourceNode,
-            destinationType,
-            sourceType,
-            checker
-          )
-        ) {
+        const start = Date.now();
+        const unsafeIterator = isUnsafeAssignment(
+          destinationNode,
+          sourceNode,
+          destinationType,
+          sourceType,
+          checker
+        );
+        let result;
+        do {
+          result = unsafeIterator.next();
+          const now = Date.now();
+          if (now - start > 2000) {
+            context.report({
+              node: node,
+              messageId: "errorStringTimedOut",
+            } as const);
+            return;
+          }
+        } while (!result.done);
+
+        if (result.value) {
           // eslint-disable-next-line functional/no-expression-statement
           context.report({
             node: node,
@@ -594,16 +621,29 @@ export const createNoUnsafeAssignmentRule = (
         const sourceNode = destinationNode.expression;
         const sourceType = checker.getTypeAtLocation(sourceNode);
 
-        // eslint-disable-next-line functional/no-conditional-statement
-        if (
-          isUnsafeAssignment(
-            destinationNode,
-            sourceNode,
-            destinationType,
-            sourceType,
-            checker
-          )
-        ) {
+        const start = Date.now();
+        const unsafeIterator = isUnsafeAssignment(
+          destinationNode,
+          sourceNode,
+          destinationType,
+          sourceType,
+          checker
+        );
+        let result;
+        do {
+          result = unsafeIterator.next();
+
+          const now = Date.now();
+          if (now - start > 2000) {
+            context.report({
+              node: node,
+              messageId: "errorStringTimedOut",
+            } as const);
+            return;
+          }
+        } while (!result.done);
+
+        if (result.value) {
           // eslint-disable-next-line functional/no-expression-statement
           context.report({
             node: node,
@@ -640,16 +680,28 @@ export const createNoUnsafeAssignmentRule = (
           const leftType = checker.getTypeAtLocation(leftTsNode);
           const rightType = checker.getTypeAtLocation(rightTsNode);
 
-          // eslint-disable-next-line functional/no-conditional-statement
-          if (
-            isUnsafeAssignment(
-              leftTsNode,
-              rightTsNode,
-              leftType,
-              rightType,
-              checker
-            )
-          ) {
+          const start = Date.now();
+          const unsafeIterator = isUnsafeAssignment(
+            leftTsNode,
+            rightTsNode,
+            leftType,
+            rightType,
+            checker
+          );
+          let result;
+          do {
+            result = unsafeIterator.next();
+            const now = Date.now();
+            if (now - start > 2000) {
+              context.report({
+                node: node,
+                messageId: "errorStringTimedOut",
+              } as const);
+              return;
+            }
+          } while (!result.done);
+
+          if (result.value) {
             // eslint-disable-next-line functional/no-expression-statement
             context.report({
               node: node,
@@ -668,16 +720,28 @@ export const createNoUnsafeAssignmentRule = (
         const leftType = checker.getTypeAtLocation(leftTsNode);
         const rightType = checker.getTypeAtLocation(rightTsNode);
 
-        // eslint-disable-next-line functional/no-conditional-statement
-        if (
-          isUnsafeAssignment(
-            leftTsNode,
-            rightTsNode,
-            leftType,
-            rightType,
-            checker
-          )
-        ) {
+        const start = Date.now();
+        const unsafeIterator = isUnsafeAssignment(
+          leftTsNode,
+          rightTsNode,
+          leftType,
+          rightType,
+          checker
+        );
+        let result;
+        do {
+          result = unsafeIterator.next();
+          const now = Date.now();
+          if (now - start > 2000) {
+            context.report({
+              node: node,
+              messageId: "errorStringTimedOut",
+            } as const);
+            return;
+          }
+        } while (!result.done);
+
+        if (result.value) {
           // eslint-disable-next-line functional/no-expression-statement
           context.report({
             node: node,
@@ -695,19 +759,34 @@ export const createNoUnsafeAssignmentRule = (
         }
 
         const destinationType = checker.getContextualType(tsNode.expression);
+
+        if (destinationType === undefined) {
+          return;
+        }
         const sourceType = checker.getTypeAtLocation(tsNode.expression);
 
-        // eslint-disable-next-line functional/no-conditional-statement
-        if (
-          destinationType !== undefined &&
-          isUnsafeAssignment(
-            tsNode.expression,
-            tsNode.expression,
-            destinationType,
-            sourceType,
-            checker
-          )
-        ) {
+        const start = Date.now();
+        const unsafeIterator = isUnsafeAssignment(
+          tsNode.expression,
+          tsNode.expression,
+          destinationType,
+          sourceType,
+          checker
+        );
+        let result;
+        do {
+          result = unsafeIterator.next();
+          const now = Date.now();
+          if (now - start > 2000) {
+            context.report({
+              node: node,
+              messageId: "errorStringTimedOut",
+            } as const);
+            return;
+          }
+        } while (!result.done);
+
+        if (result.value) {
           // eslint-disable-next-line functional/no-expression-statement
           context.report({
             node: node,
@@ -731,16 +810,28 @@ export const createNoUnsafeAssignmentRule = (
         const sourceNode = parserServices.esTreeNodeToTSNodeMap.get(node.body);
         const sourceType = checker.getTypeAtLocation(sourceNode);
 
-        // eslint-disable-next-line functional/no-conditional-statement
-        if (
-          isUnsafeAssignment(
-            destinationNode,
-            sourceNode,
-            destinationType,
-            sourceType,
-            checker
-          )
-        ) {
+        const start = Date.now();
+        const unsafeIterator = isUnsafeAssignment(
+          destinationNode,
+          sourceNode,
+          destinationType,
+          sourceType,
+          checker
+        );
+        let result;
+        do {
+          result = unsafeIterator.next();
+          const now = Date.now();
+          if (now - start > 2000) {
+            context.report({
+              node: node,
+              messageId: "errorStringTimedOut",
+            } as const);
+            return;
+          }
+        } while (!result.done);
+
+        if (result.value) {
           // eslint-disable-next-line functional/no-expression-statement
           context.report({
             node: node.body,
@@ -757,17 +848,32 @@ export const createNoUnsafeAssignmentRule = (
           const argumentType = checker.getTypeAtLocation(argument);
           const paramType = checker.getContextualType(argument);
 
-          // eslint-disable-next-line functional/no-conditional-statement
-          if (
-            paramType !== undefined &&
-            isUnsafeAssignment(
-              argument,
-              argument,
-              paramType,
-              argumentType,
-              checker
-            )
-          ) {
+          if (paramType === undefined) {
+            return;
+          }
+
+          const start = Date.now();
+          const unsafeIterator = isUnsafeAssignment(
+            argument,
+            argument,
+            paramType,
+            argumentType,
+            checker
+          );
+          let result;
+          do {
+            result = unsafeIterator.next();
+            const now = Date.now();
+            if (now - start > 2000) {
+              context.report({
+                node: node,
+                messageId: "errorStringTimedOut",
+              } as const);
+              return;
+            }
+          } while (!result.done);
+
+          if (result.value) {
             // eslint-disable-next-line functional/no-expression-statement
             context.report({
               node: node.arguments[i] ?? node,

@@ -94,6 +94,8 @@ const noUnsafeMutableReadonlyAssignment: RuleModule<MessageId, readonly []> = {
         "Asserting a mutable type to a readonly type can lead to unexpected mutation in the readonly value.",
       errorStringTSTypeAssertion:
         "Asserting a mutable type to a readonly type can lead to unexpected mutation in the readonly value.",
+      errorStringTimedOut:
+        "Took too long to process - consider disabling for this line",
     },
     schema: [],
   },

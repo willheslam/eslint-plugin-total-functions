@@ -48,6 +48,8 @@ const noUnsafeOptionalPropertyAssignment: RuleModule<MessageId, readonly []> = {
       errorStringArrowFunctionExpression: message,
       errorStringTSAsExpression: message,
       errorStringTSTypeAssertion: message,
+      errorStringTimedOut:
+        "Took too long to process - consider disabling for this line",
     },
     schema: [],
   },
